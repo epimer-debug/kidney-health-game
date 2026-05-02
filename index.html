@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>腎健康保衛戰 - 互動遊戲</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & Babel -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore-compat.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap');
+        body { font-family: 'Noto Sans TC', sans-serif; }
+        .drag-ghost { opacity: 0.5; }
+        .custom-scroll::-webkit-scrollbar { width: 6px; }
+        .custom-scroll::-webkit-scrollbar-track { background: transparent; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+    </style>
+</head>
+<body class="bg-slate-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- 安全取得全域變數 ---
+        const getEnv = (key) => typeof window !== 'undefined' && window[key] !== undefined ? window[key] : null;
+
+        // --- Firebase 初始化 ---
+        // 如果您要在 GitHub 上使用雲端排行榜，請將您的 Firebase SDK 配置貼在 manualConfig 中
+        const manualConfig = null; 
+        
+        const firebaseConfigRaw = getEnv('__firebase_config') || (manualConfig ? JSON.stringify(manualConfig) : null);
+        const appId = getEnv('__app_id') || 'kidney-game-github-v1';
+        let db, auth;
+
+        if (firebaseConfigRaw) {
+            try {
+                const conf = JSON.parse(firebaseConfigRaw);
+                if (!firebase.apps.length) {
+                    firebase.initializeApp(conf);
+                }
+                db = firebase.firestore();
+                auth = firebase.auth();
+            } catch (e) { console.error("Firebase Init Error", e); }
+        }
+
+        // --- 題目資料 (Word 與 PDF 內容) ---
+        const QUIZ_DATA = [
+            {
+                id: 1,
+                question: "1. 請問下列何者為高鉀食物？",
+                desc: "腎功能受損時需限制鉀離子攝取，以避免心律不整。",
+                options: [
+                    { id: 'q1-1', text: '燕麥片', icon: '🌾', explanation: '燕麥片屬於全穀類，磷含量較高，雖然也含有鉀，但在腎臟病飲食中更常被標註為高磷來源。' },
+                    { id: 'q1-2', text: '香蕉', icon: '🍌', isCorrect: true, explanation: '正確答案。香蕉屬於高鉀水果。手冊建議每天攝取水果應限量，並避開高鉀種類。' },
+                    { id: 'q1-3', text: '肥豬肉', icon: '🥓', explanation: '肥豬肉主要是飽和脂肪，對心血管負擔大，但鉀含量並非主要特徵。' },
+                    { id: 'q1-4', text: '鮭魚', icon: '🐟', explanation: '鮭魚是優質蛋白質來源，主要含有磷與蛋白質，鉀含量相對較低。' }
+                ]
+            },
+            {
+                id: 2,
+                question: "2. 請問下列何者為高磷食物",
+                desc: "高磷血症會導致皮膚搔癢及骨骼病變，需注意乳製品與加工品的攝取。",
+                options: [
+                    { id: 'q2-1', text: '草莓', icon: '🍓', explanation: '草莓鉀含量較高，但磷含量在一般水果範圍內，非高磷警示食物。' },
+                    { id: 'q2-2', text: '酪梨', icon: '🥑', explanation: '酪梨含有健康的單元不飽和脂肪酸，並非高磷的主要來源。' },
+                    { id: 'q2-3', text: '鮮奶', icon: '🥛', isCorrect: true, explanation: '正確答案。鮮奶及其製品含磷量極高且吸收率高，手冊建議限制飲用。' },
+                    { id: 'q2-4', text: '香菇', icon: '🍄', explanation: '一般新鮮香菇磷含量適中，但「乾香菇」因脫水後內容物比例會大幅升高，需注意。' }
+                ]
+            },
+            {
+                id: 3,
+                question: "3. 下列哪些人是罹患慢性腎臟病的高危險群？",
+                desc: "及早辨識危險因子，可以幫助我們提早預防腎功能惡化。",
+                isMultiple: true,
+                options: [
+                    { id: 'q3-1', text: '糖尿病患者', icon: '🍭', isCorrect: true, explanation: '長期高血糖會傷害腎臟微血管。手冊強調「控糖」是保腎首要任務。' },
+                    { id: 'q3-2', text: '高血壓患者', icon: '🩺', isCorrect: true, explanation: '血壓過高會增加腎絲球壓力。手冊建議血壓應維持在 130/80 mmHg 以下。' },
+                    { id: 'q3-3', text: '喜歡使用來路不明藥物者', icon: '💊', isCorrect: true, explanation: '濫用消炎止痛藥或草藥會造成腎毒性。手冊叮嚀「不聽、不信、不買、不推薦」。' },
+                    { id: 'q3-4', text: '高尿酸血症患者', icon: '🥩', isCorrect: true, explanation: '尿酸結晶可能沈積在腎臟，引發間質性腎炎及結石。' }
+                ]
+            },
+            {
+                id: 4,
+                question: "4. 下列是預防慢性腎臟病的方法？",
+                desc: "生活型態的改善是護腎的基石。",
+                isMultiple: true,
+                options: [
+                    { id: 'q4-1', text: '少鹽、少油、少糖', icon: '🥘', isCorrect: true, explanation: '即「三少生活」。手冊強調減少鈉鹽攝取能顯著降低血壓並減輕腎臟負擔。' },
+                    { id: 'q4-2', text: '多喝水、多攝取纖維質', icon: '💧', isCorrect: true, explanation: '適量飲水助代謝。纖維質可改善腸道菌叢，減少尿毒素產生。' },
+                    { id: 'q4-3', text: '遠離肥胖', icon: '🏃', isCorrect: true, explanation: '肥胖會造成腎臟高過濾狀態，維持健康 BMI (18.5-24) 至關重要。' },
+                    { id: 'q4-4', text: '不要抽菸、喝酒、吃檳榔', icon: '🚫', isCorrect: true, explanation: '這些行為會損害血管內皮功能，加速腎功能衰退。' }
+                ]
+            },
+            {
+                id: 5,
+                question: "5. 日常生活中，如何保養腎臟？",
+                desc: "養成良好習慣，是長期護腎的關鍵。",
+                isMultiple: true,
+                options: [
+                    { id: 'q5-1', text: '控制血糖、血壓、血脂', icon: '📈', isCorrect: true, explanation: '三高控制是預防慢性腎臟病及其併發症的最核心工作。' },
+                    { id: 'q5-2', text: '定期身體健康檢查', icon: '📝', isCorrect: true, explanation: '抽血驗肌酸酐、驗尿蛋白，是早期發現腎臟異常的唯一方法。' },
+                    { id: 'q5-3', text: '維持良好生活習慣', icon: '🏠', isCorrect: true, explanation: '不熬夜、睡眠充足，避免過度勞累造成身體發炎反應。' },
+                    { id: 'q5-4', text: '每天維持適合自己體力的運動', icon: '🚶', isCorrect: true, explanation: '中等強度運動如快走，可改善胰島素阻抗並協助控制血壓。' }
+                ]
+            }
+        ];
+
+        // --- 主要組件 ---
+        function App() {
+            const [view, setView] = useState('lobby'); 
+            const [currentIdx, setCurrentIdx] = useState(0);
+            const [selected, setSelected] = useState([]);
+            const [feedback, setFeedback] = useState(false);
+            const [score, setScore] = useState(0);
+            const [user, setUser] = useState(null);
+            const [history, setHistory] = useState([]);
+
+            // Auth 初始化
+            useEffect(() => {
+                if (!auth) return;
+                const token = getEnv('__initial_auth_token');
+                if (token) auth.signInWithCustomToken(token).catch(e => auth.signInAnonymously());
+                else auth.signInAnonymously();
+
+                return auth.onAuthStateChanged(u => setUser(u));
+            }, []);
+
+            // 排行榜監聽
+            useEffect(() => {
+                if (!user || !db) return;
+                const unsub = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('scores')
+                    .onSnapshot(snap => {
+                        const docs = snap.docs.map(d => d.data());
+                        setHistory(docs.sort((a,b) => b.score - a.score).slice(0, 5));
+                    }, err => console.log(err));
+                return () => unsub();
+            }, [user]);
+
+            const handleToggle = (opt) => {
+                if (feedback) return;
+                if (selected.find(i => i.id === opt.id)) {
+                    setSelected(selected.filter(i => i.id !== opt.id));
+                } else {
+                    if (!question.isMultiple) setSelected([opt]);
+                    else setSelected([...selected, opt]);
+                }
+            };
+
+            const onConfirm = () => {
+                const correctOnes = question.options.filter(o => o.isCorrect);
+                const isAllCorrect = question.isMultiple 
+                    ? selected.length === correctOnes.length && selected.every(s => s.isCorrect)
+                    : selected.length === 1 && selected[0].isCorrect;
+                
+                if (isAllCorrect) setScore(s => s + 1);
+                setFeedback(true);
+            };
+
+            const onNext = async () => {
+                if (currentIdx < QUIZ_DATA.length - 1) {
+                    setCurrentIdx(currentIdx + 1);
+                    setSelected([]);
+                    setFeedback(false);
+                } else {
+                    const final = Math.round((score / QUIZ_DATA.length) * 100);
+                    if (user && db) {
+                        await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('scores').add({
+                            uid: user.uid,
+                            score: final,
+                            at: firebase.firestore.FieldValue.serverTimestamp()
+                        }).catch(e => console.error("Cloud Save Disabled"));
+                    }
+                    setView('result');
+                }
+            };
+
+            if (view === 'lobby') return (
+                <div className="min-h-screen bg-blue-600 flex items-center justify-center p-6 text-white">
+                    <div className="bg-white text-slate-800 p-10 rounded-[2.5rem] shadow-2xl max-w-md w-full text-center">
+                        <div className="text-6xl mb-6">🛡️</div>
+                        <h1 className="text-3xl font-black text-blue-600 mb-4">腎健康保衛戰</h1>
+                        <p className="text-slate-500 mb-8 leading-relaxed">挑戰您的護腎知識，守護彩色人生！</p>
+                        <button onClick={() => setView('game')} className="w-full bg-blue-600 text-white font-bold py-5 rounded-2xl shadow-lg hover:bg-blue-700 transition-all text-xl">開始挑戰</button>
+                    </div>
+                </div>
+            );
+
+            if (view === 'result') return (
+                <div className="min-h-screen bg-slate-100 p-6">
+                    <div className="max-w-4xl mx-auto grid md:grid-cols-2 gap-8">
+                        <div className="bg-white rounded-[2.5rem] p-10 shadow-xl text-center border-t-[12px] border-blue-600">
+                            <h2 className="text-slate-400 font-bold uppercase tracking-widest mb-2">最終得分</h2>
+                            <div className="text-9xl font-black text-blue-600 mb-6">{Math.round((score/QUIZ_DATA.length)*100)}</div>
+                            <p className="text-lg text-slate-600 mb-10">答對題數：{score} / {QUIZ_DATA.length}</p>
+                            <button onClick={() => {setView('lobby'); setScore(0); setCurrentIdx(0); setSelected([]); setFeedback(false);}} className="w-full bg-slate-800 text-white py-5 rounded-2xl font-bold text-lg">再玩一次</button>
+                        </div>
+                        <div className="bg-white rounded-[2.5rem] p-10 shadow-xl">
+                            <h3 className="text-xl font-black mb-6 text-blue-600 flex items-center gap-2">🏆 最近排行榜</h3>
+                            <div className="space-y-3">
+                                {history.length === 0 ? <p className="text-slate-400 italic text-center py-10">雲端模式未啟用或暫無數據</p> : 
+                                    history.map((h, i) => (
+                                        <div key={i} className="flex justify-between p-4 bg-slate-50 rounded-xl border border-slate-100">
+                                            <span className="font-bold text-slate-500">守護者 {h.uid?.slice(0,4)}...</span>
+                                            <span className="font-black text-blue-600 text-xl">{h.score}</span>
+                                        </div>
+                                    ))
+                                }
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="min-h-screen p-4 md:p-8 flex flex-col items-center">
+                    <div className="max-w-4xl w-full">
+                        <div className="mb-8 bg-white p-4 rounded-2xl shadow-sm flex justify-between items-center">
+                            <div className="font-black text-blue-600 flex items-center gap-2">🩺 關卡 {currentIdx + 1} / {QUIZ_DATA.length}</div>
+                            <div className="w-48 h-3 bg-slate-200 rounded-full overflow-hidden">
+                                <div className="h-full bg-blue-600 transition-all duration-500" style={{width: `${(currentIdx / QUIZ_DATA.length) * 100}%`}}></div>
+                            </div>
+                        </div>
+
+                        <div className="bg-white rounded-[2.5rem] shadow-xl p-8 md:p-12 mb-8">
+                            <div className="mb-10">
+                                <span className="bg-blue-100 text-blue-600 px-5 py-2 rounded-full text-xl font-black mb-4 inline-block">{question.isMultiple ? '多選' : '單選'}</span>
+                                <h2 className="text-3xl font-black text-slate-800 mb-4 text-left">{question.question}</h2>
+                                <p className="text-slate-500 italic text-left">💡 {question.desc}</p>
+                            </div>
+
+                            <div className="grid md:grid-cols-5 gap-8">
+                                <div className="md:col-span-3 grid grid-cols-2 gap-4">
+                                    {question.options.map(opt => {
+                                        const isSel = selected.find(s => s.id === opt.id);
+                                        return (
+                                            <button key={opt.id} onClick={() => handleToggle(opt)} disabled={feedback}
+                                                className={`p-6 rounded-3xl border-4 transition-all flex flex-col items-center gap-3 ${isSel ? 'bg-blue-600 border-blue-600 text-white scale-95' : 'bg-white border-slate-100 hover:border-blue-200 text-slate-700'}`}>
+                                                <span className="text-5xl">{opt.icon}</span>
+                                                <span className="font-bold leading-tight">{opt.text}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                <div className="md:col-span-2 flex flex-col">
+                                    <div className="flex-grow min-h-[200px] border-4 border-dashed border-slate-200 rounded-3xl p-4 flex flex-wrap gap-2 content-start bg-slate-50">
+                                        {selected.length === 0 ? <div className="m-auto text-slate-300 font-bold">請點擊卡片放入此處</div> : 
+                                            selected.map(s => (
+                                                <div key={s.id} className="bg-blue-600 text-white px-4 py-2 rounded-xl flex items-center gap-2 font-bold shadow-md animate-in zoom-in duration-200">
+                                                    <span>{s.icon}</span> {s.text}
+                                                </div>
+                                            ))
+                                        }
+                                    </div>
+                                    {!feedback ? (
+                                        <button onClick={onConfirm} disabled={selected.length === 0} className={`mt-4 py-5 rounded-2xl font-black text-xl shadow-lg transition-all ${selected.length > 0 ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-slate-200 text-slate-400'}`}>確認答案</button>
+                                    ) : (
+                                        <button onClick={onNext} className="mt-4 bg-slate-800 text-white py-5 rounded-2xl font-black text-xl shadow-lg hover:bg-slate-900 transition-all">下一關 ⮕</button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        {feedback && (
+                            <div className="space-y-4 animate-in slide-in-from-bottom-8 duration-500 pb-10">
+                                <h3 className="text-xl font-black flex items-center gap-2 ml-4">📖 手冊專業解說</h3>
+                                {question.options.map(opt => (
+                                    <div key={opt.id} className={`p-8 rounded-[2rem] border-4 flex gap-6 text-left ${opt.isCorrect ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+                                        <div className="text-3xl mt-1">{opt.isCorrect ? '✅' : '❌'}</div>
+                                        <div>
+                                            <p className={`text-xl font-black ${opt.isCorrect ? 'text-green-900' : 'text-red-900'}`}>{opt.text} {opt.isCorrect ? '(正確選項)' : '(非正確選項)'}</p>
+                                            <p className={`mt-2 font-medium text-lg ${opt.isCorrect ? 'text-green-700' : 'text-red-700'}`}>{opt.explanation}</p>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
